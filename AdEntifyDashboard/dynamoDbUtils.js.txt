@@ -1,0 +1,151 @@
+AWS = require('aws-sdk');
+AWS.config.loadFromPath('./aws.json');
+var dynamoDb = new AWS.DynamoDB().client;
+
+exports.scan = function (tableName, callback) {
+    dynamoDb.scan({TableName:tableName}, function (err, data) {
+        callback(err, err != null ? null : toJson(data.Items));
+    });
+};
+exports.query = function (tableName, hashKey, callback) {
+    var params = {TableName:tableName, Key:{"HashKeyElement":{}}};
+    params.HashKeyValue  = isNaN(hashKey) ? {"S":hashKey} : {"N":hashKey.toString()};
+    dynamoDb.query(params, function (err, data) {
+        callback(err, err != null ? null : toJson(data.Items));
+    })
+};
+
+exports.getItem = function (tableName, hashKey, rangeKey, callback) {
+    var params = {TableName:tableName, Key:{"HashKeyElement":{"S":hashKey}}};
+    if (rangeKey != null) {
+        params.Key["RangeKeyElement"] = isNaN(rangeKey) ? {"S":rangeKey} : {"N":rangeKey.toString() }
+    }
+    dynamoDb.getItem(params, function (err, data) {
+        console.log(err)
+        callback(err, err != null ? null : toJson(data.Item));
+    })
+};
+
+exports.saveItem = function (tableName, item, callback) {
+    var forDynamo = toDynamo(item);
+    var params = {TableName:tableName, "Item":forDynamo};
+
+    dynamoDb.putItem(params, function (err, data) {
+        console.log(err)
+        callback(err, data);
+    });
+};
+exports.updateItem = function (tableName, item, hashKeyName, rangeKeyName, marshall, callback) {
+    var hash = item[hashKeyName];
+
+    var params = {TableName:tableName, Key:{"HashKeyElement":{"S":item[hashKeyName]}}};
+    if (rangeKeyName != null) {
+        var index = item[rangeKeyName];
+        params.Key["RangeKeyElement"] = isNaN(index) ? {"S":index} : {"N":parseInt(index) }
+    }
+    var id = item[hashKeyName];
+    delete item[hashKeyName];
+    if (rangeKeyName != null) {
+        var index = item[rangeKeyName];
+        delete item[rangeKeyName];
+    }
+    params.AttributeUpdates = toDynamo(item, marshall, true);
+    dynamoDb.updateItem(params, function (err, data) {
+        item[hashKeyName] = id;
+        if (rangeKeyName != null) {
+            item[rangeKeyName] = index;
+        }
+        callback(err, data);
+    });
+}
+
+exports.deleteItem = function (tableName, hashKey, rangeKey, callback) {
+    var params = {TableName:tableName, Key:{"HashKeyElement":{"S":hashKey}}};
+    if (rangeKey != null) {
+        params.Key.RangeKeyElement = isNaN(rangeKey) ? {"S":rangeKey} : {"N":rangeKey.toString() }
+    }
+    console.log(dynamoDb.deleteItem);
+    dynamoDb.deleteItem(params, function (err, data) {
+        console.log(err + "__");
+        console.log(data);
+        callback(err, data);
+    })
+};
+
+function toDynamo(obj, marshaller, action) {
+
+    var transform = function (input) {
+
+        var b = marshaller != null;
+        var output = {};
+        for (var p in input) {
+
+            var isObj = b && marshaller.indexOf(p) > -1
+            if (action) {
+                if (isObj) {
+                    output[p] = {"Value":{"S":JSON.stringify(input[p])}, "Action":"PUT"};
+                }
+                else {
+                    if (isNaN(input[p]) || input[p] instanceof Date) {
+                        output[p] = {"Value":{"S":input[p]}, "Action":"PUT"};
+                    }
+                    else {
+                        output[p] = {"Value":{"N":(input[p] == null) ? null : input[p].toString()}, "Action":"PUT"};
+                    }
+                }
+            }
+            else {
+                if (isObj) {
+                    output[p] = {"S":JSON.stringify(input[p])};
+                }
+                else {
+                    if (isNaN(input[p]) || input[p] instanceof Date) {
+                        output[p] = {"S":input[p]};
+                    }
+                    else {
+                        output[p] = {"N":input[p].toString()};
+                    }
+                }
+            }
+        }
+        return output;
+    }
+    if (!Array.isArray(obj))
+        return transform(obj);
+    else {
+        var outputArray = [];
+        for (var i = 0; i < obj.length; i++) {
+            outputArray.push(transform(obj[i]));
+        }
+        return outputArray;
+    }
+}
+
+function toJson(obj) {
+    var special = ["S", "SS", "N", "SN"];
+
+    var transform = function (input) {
+        var output = {};
+        for (var p in input) {
+            special.forEach(function (s) {
+                var v = input[p][s];
+                if (v)output[p] = v
+            });
+        }
+        for (var p in output) {
+            var v = output[p];
+            if (v.indexOf("[") == 0 || v.indexOf('{') == 0) output[p] = JSON.parse(v);
+        }
+        return output;
+    }
+
+    if (!Array.isArray(obj))
+        return transform(obj);
+    else {
+        var outputArray = [];
+        for (var i = 0; i < obj.length; i++) {
+            outputArray.push(transform(obj[i]));
+        }
+        return outputArray;
+    }
+}
